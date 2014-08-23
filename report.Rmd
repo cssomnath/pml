@@ -113,6 +113,14 @@ isCorrect <- (testing$classe == predict(fit.rf, scaleTest))
 paste0("Accuracy: ", round(100 * sum(isCorrect) / nrow(scaleTest), 2))
 ```
 
+It got two predictions wrong in the test sample. The table below shows that it misclassified one instance from class C and E each.
+
+```{r, message=FALSE}
+pred = predict(fit.rf, scaleTest)
+table(pred, testing$classe)
+```
+
+## Summary
 The following table shows the summary of results and improvement in accuracy we obtained.
 
  Method | Accuracy
