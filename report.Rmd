@@ -1,0 +1,123 @@
+---
+title: "Learning to Exercise"
+output: html_document
+date: "August 23, 2014"
+---
+
+```{r, message=FALSE, echo=FALSE}
+library(knitr)
+library(caret)
+library(randomForest)
+library(rattle)
+library(rpart)
+
+setwd("~/courses/data_science_track/CourseProject/PracticalMachineLearning")
+```
+
+## Data Preparation
+
+Training dataset ('pml-training.csv') contains 19662 samples and 160 features. There are 406 samples with *new\_window=='yes'*. There are 67 features that have values present only for these samples. All the samples in the test data ('pml-testing.csv') have *new\_window=='no'*. 
+
+We discard 406 training samples with *new\_window=='yes'* as these scenario is not present in the test samples. Discarding these samples allow us in reducing the number of features as many features are just NA for the samples with *new\_window=='no'*.
+
+We then discard the 67 features that are NA for all training samples. We also discard the first column which is index, the second column which is user_name and the feature new\_window which is "no" for all samples.
+
+We then use *nearZeroVar* function of caret package to identify the features with zero variance. There are 33 features with near zero variance and we discard those features as well. At this point we are left with **19216 training samples and 57 features**.
+
+```{r, message=FALSE}
+df <- read.csv("pml-training.csv")
+df <- df[df$new_window=="no", ]
+df <- df[, !names(df) %in% c("X", "user_name", "new_window")]
+df <- df[, colSums(is.na(df)) < nrow(df)]
+zv <- nearZeroVar(df, saveMetrics=TRUE)
+df <- df[, names(df)[!zv$nzv]]
+dim(df)
+```
+
+We partition the training data into 80% training set and 20% test set. We build model on the training set and report the accuracy on the test set.
+
+```{r}
+set.seed(1371)
+inTrain <- createDataPartition(df$classe, p=0.8, list=FALSE)
+training <- df[inTrain, ]
+testing <- df[-inTrain, ]
+dim(training); dim(testing)
+```
+
+## Baseline
+
+Our baseline method is to train a decision tree. We let caret to tune the parameter using 5-fold cross validation on the training set. The decision tree achieves less than **50%** accuracy on the test set.
+
+```{r, message=FALSE}
+trControl = trainControl(method = "cv", number = 5, allowParallel = TRUE)
+fit.rpart <- train(classe ~ ., data=training, method="rpart", trControl = trControl)
+isCorrect <- (testing$classe == predict(fit.rpart, testing))
+paste0("Accuracy: ", round(100 * sum(isCorrect) / nrow(testing), 2))
+```
+
+## Feature Selection
+
+The following figure shows the decision tree that we have trained above.
+
+```{r, message=FALSE}
+fancyRpartPlot(fit.rpart$finalModel)
+```
+
+We see that *cvtd_timestamp* got selected as a decision node. This is the only factor variable in the predictor set. All other variables are numeric. The information in *cvtd_timestamp* is already captured in *raw_timestamp_part_1* and *raw_timestamp_part_2*. So we thought of discarding the *cvtd_timestamp* feature. After removing this feature we observe that the accuracy of decision tree increases to **60.97%**.
+
+```{r}
+training = training[, !(names(training) %in% c("cvtd_timestamp"))]
+testing = testing[, !(names(testing) %in% c("cvtd_timestamp"))]
+fit.rpart <- train(classe ~ ., data=training, method="rpart", trControl = trControl)
+isCorrect <- (testing$classe == predict(fit.rpart, testing))
+paste0("Accuracy: ", round(100 * sum(isCorrect) / nrow(testing), 2))
+```
+
+
+## Random Forest
+
+The top two features of the decision tree are roll_belt, pitch\_forearm. From the feature plot we see that those features separates the data into two clusters but does not separate the classes well.
+
+```{r, message=FALSE}
+featurePlot(x=training[, c("roll_belt", "pitch_forearm")], y=training$classe, plot="pairs")
+```
+
+We then change the model to random forest which generally works better than training a single decision tree. Using randomForest we get accuracy of **99.92%** which is a great improvement when compared to the single decision tree.
+
+
+```{r, message=FALSE}
+fit.rf <- randomForest(classe ~ ., data=training)
+isCorrect <- (testing$classe == predict(fit.rf, testing))
+paste0("Accuracy: ", round(100 * sum(isCorrect) / nrow(testing), 2))
+```
+
+
+## Preprocessing
+Some of the features in the training data are skewed. Following is the histogram of the roll_belt feature which was the topmost feature chosen by the decision tree. The histogram plot shows that the feature is very skewed.
+
+```{r, echo=FALSE}
+hist(training$roll_belt, main="", xlab="roll_belt")
+```
+
+We now standardize the features to reduce the skewness. Random forest achieves accuracy of **99.95%** when trained using the standardize features.
+
+```{r}
+yCol = dim(training)[2]
+preProc = preProcess(training[, -yCol], method=c("center", "scale"))
+scaleTrain = predict(preProc, training[, -yCol])
+scaleTrain$classe = training$classe
+scaleTest = predict(preProc, testing[, -yCol])
+
+fit.rf <- randomForest(classe ~ ., data=scaleTrain)
+isCorrect <- (testing$classe == predict(fit.rf, scaleTest))
+paste0("Accuracy: ", round(100 * sum(isCorrect) / nrow(scaleTest), 2))
+```
+
+The following table shows the summary of results and improvement in accuracy we obtained.
+
+ Method | Accuracy
+------- | --------
+Decision Tree | 49.88%
+After Feature Selection | 60.97%
+randomForest | 99.92%
+randomForest with standardized features | 99.95%
